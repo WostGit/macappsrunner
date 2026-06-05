@@ -117,3 +117,5 @@ jobs:
           ROOT="${{ steps.locate.outputs.root }}"
           echo "Bundle was reassembled, SHA-verified, extracted, scripts syntax-checked, sample .debs validated, and .deb packages installed on Ubuntu 22.04 runner."
           echo "Skipping actual Darling kernel-module build/load because GitHub-hosted runners are not a reliable target for persistent kernel module testing."
+
+# Triggered from ChatGPT to run the bundle extraction/use test.
