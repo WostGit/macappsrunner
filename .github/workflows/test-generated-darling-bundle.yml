@@ -1,0 +1,119 @@
+name: Test generated Darling bundle
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - generated/**
+      - .github/workflows/test-generated-darling-bundle.yml
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  test-bundle:
+    name: Reassemble, extract, and use bundle
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Show generated files
+        run: |
+          set -euxo pipefail
+          find generated -maxdepth 1 -type f -printf '%p %s bytes\n' | sort
+
+      - name: Reassemble ZIP if needed
+        run: |
+          set -euxo pipefail
+          if [ -f generated/darling_offline_bundle_ubuntu_22_04_amd64.zip ]; then
+            cp generated/darling_offline_bundle_ubuntu_22_04_amd64.zip ./darling_offline_bundle_ubuntu_22_04_amd64.zip
+          else
+            test -f generated/darling_offline_bundle_ubuntu_22_04_amd64.zip.part-000
+            cat generated/darling_offline_bundle_ubuntu_22_04_amd64.zip.part-* > ./darling_offline_bundle_ubuntu_22_04_amd64.zip
+          fi
+          ls -lh ./darling_offline_bundle_ubuntu_22_04_amd64.zip
+
+      - name: Verify SHA-256
+        run: |
+          set -euxo pipefail
+          EXPECTED_HASH=$(awk '{print $1}' generated/darling_offline_bundle_ubuntu_22_04_amd64.zip.sha256)
+          echo "$EXPECTED_HASH  darling_offline_bundle_ubuntu_22_04_amd64.zip" > ./bundle.sha256
+          sha256sum -c ./bundle.sha256
+
+      - name: Extract ZIP
+        run: |
+          set -euxo pipefail
+          rm -rf extracted
+          mkdir extracted
+          unzip -q darling_offline_bundle_ubuntu_22_04_amd64.zip -d extracted
+          find extracted -maxdepth 3 -type f | sed 's#^#FILE #' | head -200
+
+      - name: Locate bundle root and inspect contents
+        id: locate
+        run: |
+          set -euxo pipefail
+          ROOT=$(find extracted -mindepth 1 -maxdepth 1 -type d | head -1)
+          test -n "$ROOT"
+          echo "root=$ROOT" >> "$GITHUB_OUTPUT"
+          test -d "$ROOT/debs"
+          test -f "$ROOT/README.txt"
+          test -f "$ROOT/install_debs_on_ubuntu.sh"
+          test -f "$ROOT/build_darling_on_ubuntu.sh"
+          echo "Bundle root: $ROOT"
+          echo "Deb count: $(find "$ROOT/debs" -type f -name '*.deb' | wc -l)"
+          du -sh "$ROOT" "$ROOT/debs"
+          sed -n '1,120p' "$ROOT/README.txt"
+
+      - name: Validate scripts and sample .deb files
+        run: |
+          set -euxo pipefail
+          ROOT="${{ steps.locate.outputs.root }}"
+          bash -n "$ROOT/install_debs_on_ubuntu.sh"
+          bash -n "$ROOT/build_darling_on_ubuntu.sh"
+          find "$ROOT/debs" -type f -name '*.deb' | sort | head -20 > /tmp/sample_debs.txt
+          while IFS= read -r deb; do
+            echo "Inspecting $deb"
+            dpkg-deb --info "$deb" >/dev/null
+          done < /tmp/sample_debs.txt
+
+      - name: Use bundle by installing downloaded .deb packages
+        run: |
+          set -euxo pipefail
+          ROOT="${{ steps.locate.outputs.root }}"
+          sudo dpkg -i "$ROOT"/debs/*.deb || sudo apt-get install -f -y
+
+      - name: Verify usable build tools after install
+        run: |
+          set -euxo pipefail
+          git --version
+          cmake --version
+          clang --version
+          gcc --version
+          make --version
+          pkg-config --version
+
+      - name: Check Darling source archive if present
+        run: |
+          set -euxo pipefail
+          ROOT="${{ steps.locate.outputs.root }}"
+          if [ -f "$ROOT/source/darling-master.tar.gz" ]; then
+            tar -tzf "$ROOT/source/darling-master.tar.gz" | head -50
+          else
+            echo "Darling source archive not present."
+          fi
+
+      - name: Summary
+        run: |
+          set -euxo pipefail
+          ROOT="${{ steps.locate.outputs.root }}"
+          echo "Bundle was reassembled, SHA-verified, extracted, scripts syntax-checked, sample .debs validated, and .deb packages installed on Ubuntu 22.04 runner."
+          echo "Skipping actual Darling kernel-module build/load because GitHub-hosted runners are not a reliable target for persistent kernel module testing."
